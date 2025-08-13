@@ -1,0 +1,4 @@
+BASE_INPUT='off-highway-builds'
+SELECTED_REPOS_STRING='dvm_visualization_tool'
+BRANCH_CHOICES__off_highway_backend='devlop'
+BRANCH_CHOICES__dvm_visualization_tool='develop'

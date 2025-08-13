@@ -44,7 +44,7 @@ load_config() {
     declare -ga SELECTED=()
     declare -gA BRANCH_CHOICES
     declare -gA CONFIG_CHOICES
-    
+
     if [[ -f "$CONFIG_FILE" ]]; then
         echo "💡 Loading previous inputs from $CONFIG_FILE..."
         while IFS='=' read -r key value; do
@@ -221,12 +221,12 @@ for REPO in "${SELECTED[@]}"; do
     [[ -z "$SCRIPT_TO_RUN" ]] && continue
 
     REPO_DIR="$CLONE_DIR/$REPO"
-    
+
     # The script now checks the config file for a previously saved branch.
     # If a saved branch exists, it is used as the default.
     # If not, the hardcoded DEFAULT_BRANCHES is used.
     PREVIOUSLY_SAVED_BRANCH="${BRANCH_CHOICES[$REPO]:-${DEFAULT_BRANCHES[$REPO]}}"
-    
+
     read -rp "Enter branch for $REPO [default: $PREVIOUSLY_SAVED_BRANCH]: " USER_BRANCH
     BRANCH_CHOICES["$REPO"]="${USER_BRANCH:-$PREVIOUSLY_SAVED_BRANCH}"
 
@@ -262,32 +262,157 @@ for REPO in "${SELECTED[@]}"; do
     fi
 
     if [[ "$REPO" == "dvm_visualization_tool" ]]; then
-        declare -a AVAILABLE_CONFIGS=("development" "test" "uat")
+        # Dynamically find available configuration files from the environment directory.
+        REPO_DIR="$CLONE_DIR/$REPO"
+        ENV_DIR="$REPO_DIR/projects/my-app/src/environments"
+        declare -a DYNAMIC_CONFIGS=()
+        DEFAULT_CONFIG_NAME="development"
+
+        # Check if the environment directory exists before attempting to read files.
+        if [[ -d "$ENV_DIR" ]]; then
+            # Find all files matching environment.*.ts, and extract the configuration name.
+            # The 'development' config is handled separately as the default.
+            for file in "$ENV_DIR"/environment.*.ts; do
+                if [[ -f "$file" ]]; then
+                    config_name=$(basename "$file" .ts)
+                    config_name="${config_name#environment.}"
+                    if [[ "$config_name" != "development" ]]; then
+                        DYNAMIC_CONFIGS+=("$config_name")
+                    fi
+                fi
+            done
+        fi
+        
+        # Sort the configurations alphabetically for a consistent order.
+        IFS=$'\n' DYNAMIC_CONFIGS=($(sort <<<"${DYNAMIC_CONFIGS[*]}"))
+        unset IFS
+
+        declare -a AVAILABLE_CONFIGS=("${DYNAMIC_CONFIGS[@]}")
+
         echo -e "\n⚙️ Available build configurations for $REPO:"
+        echo "  0) Create a new environment..."
         for k in "${!AVAILABLE_CONFIGS[@]}"; do
             printf "  %d) %s\n" "$((k+1))" "${AVAILABLE_CONFIGS[$k]}"
         done
 
-        # Use previously saved config number as the default
-        DEFAULT_CONFIG_NAME="development"
+        # Use previously saved config as the default.
         PREVIOUSLY_SAVED_CONFIG="${CONFIG_CHOICES[$REPO]:-$DEFAULT_CONFIG_NAME}"
-        PREVIOUSLY_SAVED_CONFIG_NUM=1 # Default to development
+        read -rp "📌 Enter configuration name or number [default: $PREVIOUSLY_SAVED_CONFIG]: " USER_CONFIG_INPUT
 
-        for k in "${!AVAILABLE_CONFIGS[@]}"; do
-            if [[ "${AVAILABLE_CONFIGS[$k]}" == "$PREVIOUSLY_SAVED_CONFIG" ]]; then
-                PREVIOUSLY_SAVED_CONFIG_NUM=$((k + 1))
-                break
+        # Handle empty input, which defaults to the previously saved config or "development".
+        USER_CONFIG_INPUT="${USER_CONFIG_INPUT:-$PREVIOUSLY_SAVED_CONFIG}"
+
+        # Initialize the final config choice.
+        FINAL_CONFIG=""
+
+        # Check if the input is a number.
+        if [[ "$USER_CONFIG_INPUT" =~ ^[0-9]+$ ]]; then
+            if [[ "$USER_CONFIG_INPUT" == "0" ]]; then
+                read -rp "Enter the name for the new environment: " NEW_ENV_NAME
+                # Use the new name, otherwise fall back to a default.
+                FINAL_CONFIG="${NEW_ENV_NAME:-$DEFAULT_CONFIG_NAME}"
+
+                # --- UPDATED LOGIC FOR CREATING ENVIRONMENT FILE AND UPDATING ANGULAR.JSON ---
+                ENV_DIR="$REPO_DIR/projects/my-app/src/environments"
+                DEV_TEMPLATE="$ENV_DIR/environment.dev.ts"
+                NEW_ENV_FILE="$ENV_DIR/environment.${FINAL_CONFIG}.ts"
+                ANGULAR_CONFIG_FILE="$REPO_DIR/angular.json"
+
+                # Default values from the dev template for the new environment
+                NEW_REALM="D_SPRICED"
+                NEW_CLIENT_ID="D_SPRICED_Client"
+                DEFAULT_URL="https://${FINAL_CONFIG}-off-highway.alpha.simadvisory.com"
+
+                if [ -f "$NEW_ENV_FILE" ]; then
+                    echo "⚠️ Warning: Environment file '$NEW_ENV_FILE' already exists. Skipping creation."
+                else
+                    echo "🆕 Creating new environment file '$NEW_ENV_FILE' from template..."
+                    cp "$DEV_TEMPLATE" "$NEW_ENV_FILE"
+
+                    # Prompt for new values for URL, realm, and client ID
+                    read -rp "Enter the base URL for the new environment [default: '$DEFAULT_URL']: " USER_URL
+                    NEW_URL="${USER_URL:-$DEFAULT_URL}"
+                    read -rp "Enter the Keycloak Realm [default: $NEW_REALM]: " USER_REALM
+                    NEW_REALM="${USER_REALM:-$NEW_REALM}"
+                    read -rp "Enter the Keycloak Client ID [default: $NEW_CLIENT_ID]: " USER_CLIENT_ID
+                    NEW_CLIENT_ID="${USER_CLIENT_ID:-$NEW_CLIENT_ID}"
+
+                    # Use sed to replace all relevant variables in the new file
+                    # We are using a different delimiter (#) to avoid issues with slashes in the URLs
+                    sed -i "s#https://dev-off-highway.alpha.simadvisory.com#${NEW_URL}#g" "$NEW_ENV_FILE"
+                    sed -i "s#https://auth.dev.simadvisory.com/auth#https://auth.dev.simadvisory.com/auth#g" "$NEW_ENV_FILE"
+                    sed -i "s#D_SPRICED#${NEW_REALM}#g" "$NEW_ENV_FILE"
+                    sed -i "s#D_SPRICED_Client#${NEW_CLIENT_ID}#g" "$NEW_ENV_FILE"
+
+                    echo "✅ New environment file created and updated."
+                fi
+
+                # Update angular.json to include the new configuration
+                if command -v jq &> /dev/null; then
+                    echo "Updating 'angular.json' to include the new configuration..."
+                    # Use jq to add the new configuration to the 'my-app' project
+                    TEMP_JSON=$(jq --arg config_name "$FINAL_CONFIG" \
+                                       --arg env_file "projects/my-app/src/environments/environment.${FINAL_CONFIG}.ts" \
+                                       '
+                                       .projects."my-app".architect.build.configurations |=
+                                       (
+                                           . +
+                                           {
+                                               ($config_name): {
+                                                   "fileReplacements": [
+                                                       {
+                                                           "replace": "projects/my-app/src/environments/environment.ts",
+                                                           "with": $env_file
+                                                       }
+                                                   ],
+                                                   "budgets": [
+                                                       {
+                                                           "type": "initial",
+                                                           "maximumWarning": "500kb",
+                                                           "maximumError": "1mb"
+                                                       },
+                                                       {
+                                                           "type": "anyComponentStyle",
+                                                           "maximumWarning": "2kb",
+                                                           "maximumError": "4kb"
+                                                       }
+                                                   ]
+                                               }
+                                           }
+                                       )
+                                       ' "$ANGULAR_CONFIG_FILE")
+                    echo "$TEMP_JSON" > "$ANGULAR_CONFIG_FILE"
+                    echo "✅ 'angular.json' updated successfully."
+                else
+                    echo "⚠️ Warning: 'jq' is not installed. Unable to update 'angular.json'."
+                    echo "Please install 'jq' (e.g., 'sudo apt-get install jq') to automatically add build configurations."
+                fi
+
+                # --- NEW CODE: Commit the new environment file and the updated angular.json ---
+                # This block is essential for making the changes permanent and preventing them from being deleted on the next run.
+                (
+                    cd "$REPO_DIR" || exit
+                    git add "projects/my-app/src/environments/environment.${FINAL_CONFIG}.ts"
+                    git add "angular.json"
+                    git commit -m "feat(config): Add new environment configuration for ${FINAL_CONFIG}"
+                ) || echo "❌ Failed to commit new configuration. The files may be deleted on the next run."
+                # -------------------------------------------------------------------------------------
+
+                # --- END OF UPDATED LOGIC ---
+
+            elif (( USER_CONFIG_INPUT > 0 && USER_CONFIG_INPUT <= ${#AVAILABLE_CONFIGS[@]} )); then
+                # Use the config from the numbered list.
+                FINAL_CONFIG="${AVAILABLE_CONFIGS[$((USER_CONFIG_INPUT-1))]}"
+            else
+                echo "⚠️ Invalid selection: $USER_CONFIG_INPUT. Defaulting to '$DEFAULT_CONFIG_NAME'."
+                FINAL_CONFIG="${DEFAULT_CONFIG_NAME}"
             fi
-        done
-        read -rp "📌 Enter configuration number [default: $PREVIOUSLY_SAVED_CONFIG_NUM]: " USER_CONFIG_CHOICE_NUM
-        USER_CONFIG_CHOICE_NUM="${USER_CONFIG_CHOICE_NUM:-$PREVIOUSLY_SAVED_CONFIG_NUM}"
-
-        if [[ "$USER_CONFIG_CHOICE_NUM" =~ ^[0-9]+$ ]] && (( USER_CONFIG_CHOICE_NUM > 0 && USER_CONFIG_CHOICE_NUM <= ${#AVAILABLE_CONFIGS[@]} )); then
-            CONFIG_CHOICES["$REPO"]="${AVAILABLE_CONFIGS[$((USER_CONFIG_CHOICE_NUM-1))]}"
         else
-            echo "⚠️ Invalid selection: $USER_CONFIG_CHOICE_NUM. Defaulting to '${DEFAULT_CONFIG_NAME}'."
-            CONFIG_CHOICES["$REPO"]="${DEFAULT_CONFIG_NAME}"
+            # If input is not a number, assume it's a configuration name.
+            FINAL_CONFIG="$USER_CONFIG_INPUT"
         fi
+
+        CONFIG_CHOICES["$REPO"]="$FINAL_CONFIG"
     else
         # Use previously saved config as the default for other repos
         PREVIOUSLY_SAVED_CONFIG="${CONFIG_CHOICES[$REPO]:-development}"
@@ -328,4 +453,3 @@ fi
 
 echo "📄 Summary at: $SUMMARY_CSV_FILE"
 exit $PARALLEL_EXIT_CODE
-
