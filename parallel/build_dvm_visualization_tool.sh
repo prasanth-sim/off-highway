@@ -87,16 +87,16 @@ if command -v jq &> /dev/null; then
     # 3. Add 'file-saver' and 'echarts-stat' to the allowedCommonJsDependencies list.
     #    This prevents the warnings about using CommonJS modules.
     jq --arg config "$CONFIG" \
-       '.projects."my-app".architect.build.configurations[$config].budgets |= map(
-           if .type == "initial" then
-               .maximumError = "4mb"
-           elif .type == "anyComponentStyle" then
-               .maximumError = "8kb"
-           else . end
-       ) |
-       .projects."my-app".architect.build.options.allowedCommonJsDependencies |= (
-           . + ["file-saver", "echarts-stat"] | unique
-       )' "$ANGULAR_CONFIG_FILE" > temp.json && mv temp.json "$ANGULAR_CONFIG_FILE"
+        '.projects."my-app".architect.build.configurations[$config].budgets |= map(
+            if .type == "initial" then
+                .maximumError = "4mb"
+            elif .type == "anyComponentStyle" then
+                .maximumError = "8kb"
+            else . end
+        ) |
+        .projects."my-app".architect.build.options.allowedCommonJsDependencies |= (
+            . + ["file-saver", "echarts-stat"] | unique
+        )' "$ANGULAR_CONFIG_FILE" > temp.json && mv temp.json "$ANGULAR_CONFIG_FILE"
     echo "✅ 'angular.json' updated to resolve build issues."
 else
     echo "⚠️ Warning: 'jq' is not installed. Unable to automatically fix build configuration."
@@ -107,8 +107,17 @@ echo "📦 Installing npm dependencies..."
 npm install
 
 echo "🛠️ Starting Angular build for project 'my-app' with configuration: $CONFIG..."
-# The --project flag specifies which project to build in a multi-project workspace.
-# The --configuration flag is essential for using the environment file.
+
+# --- BEGIN PATCH ---
+# This block maps the user-friendly 'dev' input to the actual 'development' configuration name
+# that is expected to be in the angular.json file. This fixes the "Configuration 'dev' not set" error.
+if [[ "$CONFIG" == "dev" ]]; then
+    echo "💡 Mapping configuration 'dev' to 'development'."
+    CONFIG="development"
+fi
+# --- END PATCH ---
+
+# The build command now uses the potentially updated CONFIG variable
 ng build my-app --output-path="$BUILD_DIR" --configuration="$CONFIG"
 
 # === Create/Update Symlink ===
