@@ -427,13 +427,20 @@ save_config
 
 # === Phase 3: Parallel execution ===
 CPU_CORES=$(nproc)
+# Calculate max jobs = 80% of available cores (rounded up)
+MAX_JOBS=$(( (CPU_CORES * 80 + 99) / 100 ))
+
+echo -e "\n🚀 Running ${#COMMANDS[@]} builds in parallel, limited to ~80% of CPU capacity..."
+
 if [ ${#COMMANDS[@]} -eq 0 ]; then
-    echo "No builds to run."
+    echo "No parallel commands to execute. Exiting."
     exit 0
 fi
 
-printf "%s\n" "${COMMANDS[@]}" | parallel -j "$CPU_CORES" --load 100% --no-notice --bar
+set +e # Temporarily disable 'exit on error' for the parallel command
+printf "%s\n" "${COMMANDS[@]}" | parallel -j "$MAX_JOBS" --load 80% --no-notice --bar
 PARALLEL_EXIT_CODE=$?
+set -e # Re-enable 'exit on error'
 
 # === Phase 4: Summary ===
 END_TIME=$(date +"%Y-%m-%d %H:%M:%S")

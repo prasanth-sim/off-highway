@@ -1,3 +1,4 @@
 # Secrets
 .env
 .git-credentials
+.repo_builder_config
