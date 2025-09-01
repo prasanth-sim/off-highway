@@ -2,6 +2,7 @@
 set -Eeuo pipefail
 trap 'echo "[❌ ERROR] Line $LINENO: $BASH_COMMAND (exit $?)"' ERR
 
+# === Script Context ===
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG_PREFIX="[env-setup]"
 ENV_FILE="$SCRIPT_DIR/.env"
@@ -13,46 +14,46 @@ log() { echo "$LOG_PREFIX $(date +'%F %T') $*"; }
 log "🔧 Updating package list..."
 sudo apt-get update -y
 
-log "📦 Installing Git, curl, unzip..."
-sudo apt-get install -y git curl unzip software-properties-common
+log "📦 Installing Git, curl, unzip, and essential tools..."
+sudo apt-get install -y git curl unzip software-properties-common jq
 
-# Changed from OpenJDK 11 to OpenJDK 17
 log "☕ Installing OpenJDK 17..."
 sudo apt-get install -y openjdk-17-jdk
 
-# Maven version remains the same
-log "🛠️ Installing Maven 3.6.3..."
+log "🛠️ Installing Maven..."
 sudo apt-get install -y maven
 
-# Changed from Node.js 16.x to Node.js 22.x and npm 8 to 10
-log "🟩 Installing Node.js 22.18.0 and npm 10.9.3..."
-curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+# Changed back to Node.js 16.x
+log "🟩 Installing Node.js 16.x, npm 8.x, and Angular CLI 13.x..."
+curl -fsSL https://deb.nodesource.com/setup_16.x | sudo -E bash -
 sudo apt-get install -y nodejs
-sudo npm install -g npm@10.9.3
+sudo npm install -g npm@8.19.4
+sudo npm install -g @angular/cli@13.3.11
 
-# Changed from Angular CLI 13.3.11 to 20.1.4
-log "📦 Installing Angular CLI 20.1.4..."
-sudo npm install -g @angular/cli@20.1.4
+log "⚙️ Installing GNU Parallel..."
+sudo apt-get install -y parallel
 
-# Removed GNU Parallel installation as it was listed as 'Not installed' in the original request
-# log "⚙️ Installing GNU Parallel..."
-# sudo apt-get install -y parallel
+# ---
 
-# === .env setup ===
-if [[ ! -f "$ENV_FILE" ]]; then
-  read -p "🔐 Enter GitHub username: " GIT_USERNAME
-  read -s -p "🔑 Enter GitHub token: " GIT_TOKEN
-  echo
-  echo "GIT_USERNAME=$GIT_USERNAME" > "$ENV_FILE"
-  echo "GIT_TOKEN=$GIT_TOKEN" >> "$ENV_FILE"
-  chmod 600 "$ENV_FILE"
-else
-  log "ℹ️ .env file already exists."
-fi
+### **Git and Environment Setup**
+
+log "🔐 Clearing old Git credentials to prevent authentication failures..."
+rm -f "$ENV_FILE" "$GIT_CREDENTIALS_FILE"
+git config --global --unset-all credential.helper || true
+
+log "📝 Setting up .env file for Git credentials..."
+read -p "🔐 Enter GitHub username: " GIT_USERNAME
+read -s -p "🔑 Enter GitHub personal access token (PAT): " GIT_TOKEN
+echo
+echo "GIT_USERNAME=$GIT_USERNAME" > "$ENV_FILE"
+echo "GIT_TOKEN=$GIT_TOKEN" >> "$ENV_FILE"
+chmod 600 "$ENV_FILE"
+log "✅ .env file created at $ENV_FILE"
+
 source "$ENV_FILE"
 
 if [[ -z "${GIT_USERNAME:-}" || -z "${GIT_TOKEN:-}" ]]; then
-  log "❌ Missing GitHub credentials."
+  log "❌ Missing GitHub credentials. Please set GIT_USERNAME and GIT_TOKEN in $ENV_FILE."
   exit 1
 fi
 
@@ -60,16 +61,22 @@ echo "https://${GIT_USERNAME}:${GIT_TOKEN}@github.com" > "$GIT_CREDENTIALS_FILE"
 chmod 600 "$GIT_CREDENTIALS_FILE"
 git config --global credential.helper "store --file=$GIT_CREDENTIALS_FILE"
 git config --global user.name "$GIT_USERNAME"
-log "✅ Git configured."
+log "✅ Git configured with credential helper."
 
-# === Version Checks ===
-# Updated expected versions to match the request
+# ---
+
+### **Version Checks**
+
+log "🔍 Verifying tool versions..."
+
+# Define expected versions
 EXPECTED_JAVA="17"
-EXPECTED_MAVEN="3.6.3"
-EXPECTED_NODE="22.18.0"
-EXPECTED_NPM="10.9.3"
-EXPECTED_NG="20.1.4"
-EXPECTED_GIT="2" # Git version 2.25.1 matches this check
+EXPECTED_MAVEN="3.8.7"
+EXPECTED_NODE="16"
+EXPECTED_NPM="8"
+EXPECTED_NG="13"
+EXPECTED_GIT="2"
+EXPECTED_PARALLEL="20231122"
 
 check_version() {
   TOOL="$1"; ACTUAL="$2"; EXPECTED="$3"
@@ -83,11 +90,11 @@ check_version() {
 
 JAVA_VERSION=$(java -version 2>&1 | awk -F[\".] '/version/ {print $2}')
 MAVEN_VERSION=$(mvn -v | awk '/Apache Maven/ {print $3}')
-NODE_VERSION=$(node -v | tr -d 'v')
-NPM_VERSION=$(npm -v)
-NG_VERSION=$(ng version | awk '/Angular CLI/ {print $3}')
+NODE_VERSION=$(node -v 2>&1 | cut -d. -f1 | tr -d 'v' || echo "Not Found")
+NPM_VERSION=$(npm -v 2>&1 | cut -d. -f1 || echo "Not Found")
+NG_VERSION=$(ng version 2>&1 | awk '/Angular CLI/ {print $3}' | cut -d. -f1 || echo "Not Found")
 GIT_VERSION=$(git --version | awk '{print $3}' | cut -d. -f1)
-# Removed GNU Parallel version check
+PARALLEL_VERSION=$(parallel --version 2>&1 | head -n 1 | awk '{print $3}' || echo "Not Found")
 
 check_version "Java" "$JAVA_VERSION" "$EXPECTED_JAVA"
 check_version "Maven" "$MAVEN_VERSION" "$EXPECTED_MAVEN"
@@ -95,5 +102,6 @@ check_version "Node.js" "$NODE_VERSION" "$EXPECTED_NODE"
 check_version "npm" "$NPM_VERSION" "$EXPECTED_NPM"
 check_version "Angular CLI" "$NG_VERSION" "$EXPECTED_NG"
 check_version "Git" "$GIT_VERSION" "$EXPECTED_GIT"
+check_version "GNU Parallel" "$PARALLEL_VERSION" "$EXPECTED_PARALLEL"
 
 log "✅ Environment setup completed successfully."
