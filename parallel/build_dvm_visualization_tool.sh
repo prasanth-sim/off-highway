@@ -6,7 +6,9 @@ trap 'echo "[❌ ERROR] Line $LINENO: $BASH_COMMAND (exit $?)"' ERR
 BRANCH="${1:-main}"
 BASE_DIR="${2:-$HOME/build}"
 CONFIG="${3:-development}"
-URL_TO_USE="${4:-https://dev-off-highway.alpha.simadvisory.com}" # Use the 4th argument for the URL, with a default value if not provided.
+# The URL is now dynamically generated based on the configuration name
+# This makes the script more flexible and eliminates the need for a manual URL argument.
+URL_TO_USE="https://${CONFIG}-off-highway.alpha.simadvisory.com"
 REPO="dvm_visualization_tool"
 DATE_TAG=$(date +"%Y%m%d_%H%M%S")
 
