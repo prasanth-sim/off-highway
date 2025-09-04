@@ -45,7 +45,7 @@ BUILD_DIR="$BUILD_BASE/${BRANCH//\//_}_${DATE_TAG}"
 mkdir -p "$BUILD_DIR"
 
 echo "📦 Searching for and copying built JARs to [$BUILD_DIR]..."
-find "$REPO_DIR" -type f -path "*/target/transaction-management-0.0.1-SNAPSHOT.jar" -exec cp -v {} "$BUILD_DIR/" \;
+find "$REPO_DIR" -type f -path "*/target/oopsi-2.0.jar" -exec cp -v {} "$BUILD_DIR/" \;
 
 # === Update 'latest' Symlink ===
 echo "🔗 Updating 'latest' symlink..."

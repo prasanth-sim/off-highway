@@ -1,12 +1,15 @@
 #!/bin/bash
 set -Eeuo pipefail
 trap 'echo "[❌ ERROR] Line $LINENO: $BASH_COMMAND (exit $?)"' ERR
+
 # === Inputs ===
 BRANCH="${1:-main}"
-BASE_DIR="${2:-$HOME/qwertyu}"
+BASE_DIR="${2:-$HOME/build}"
 CONFIG="${3:-development}"
+URL_TO_USE="${4:-https://dev-off-highway.alpha.simadvisory.com}" # Use the 4th argument for the URL, with a default value if not provided.
 REPO="dvm_visualization_tool"
 DATE_TAG=$(date +"%Y%m%d_%H%M%S")
+
 # === Derived Paths ===
 REPO_DIR="$BASE_DIR/repos/$REPO"
 BUILD_DIR="$BASE_DIR/builds/$REPO/${BRANCH//\//_}_$DATE_TAG"
@@ -14,12 +17,15 @@ LATEST_LINK="$BASE_DIR/builds/$REPO/latest"
 LOG_DIR="$BASE_DIR/automationlogs"
 LOG_FILE="$LOG_DIR/${REPO}_${DATE_TAG}.log"
 GIT_URL="https://github.com/simaiserver/dvm_visualization_tool.git"
+
 # --- Setup Directories ---
 mkdir -p "$LOG_DIR" "$BUILD_DIR"
+
 # --- Redirect Output to Log File ---
 exec &> >(tee -a "$LOG_FILE")
-echo "🔧 Starting build for [$REPO] on branch [$BRANCH] with configuration [$CONFIG]..."
+echo "🔧 Starting build for [$REPO] on branch [$BRANCH]..."
 echo "📅 Timestamp: $DATE_TAG"
+
 # === Git Clone or Pull and Branch Checkout ===
 echo "🚀 Preparing repository: $REPO_DIR"
 if [[ ! -d "$REPO_DIR" ]]; then
@@ -42,6 +48,7 @@ git checkout "$BRANCH" || {
 }
 echo "✅ Successfully checked out branch: $(git rev-parse --abbrev-ref HEAD)"
 # --- END OF GIT OPERATIONS ---
+
 # --- Node.js Version Check ---
 echo "🔍 Verifying Node.js version..."
 NODE_VERSION=$(node -v)
@@ -53,38 +60,69 @@ if [[ "$(printf '%s\n' "$MIN_NODE_VERSION" "$NODE_VERSION" | sort -V | head -n1)
     exit 1
 fi
 echo "✅ Node.js version ($NODE_VERSION) is compatible."
-# === Build Process ===
-echo "🔨 Building project in: $(pwd)"
-ANGULAR_CONFIG_FILE="./angular.json"
+
+# === Dynamic Configuration Creation ===
+ENV_FILE="$REPO_DIR/projects/my-app/src/environments/environment.$CONFIG.ts"
+ANGULAR_CONFIG_FILE="$REPO_DIR/angular.json"
+
+echo "🆕 Creating/Updating environment file '$ENV_FILE'..."
+cat > "$ENV_FILE" <<EOF
+export const environment = {
+    URL: '$URL_TO_USE',
+    KEYCLOAK_URL: 'https://auth.dev.simadvisory.com/auth',
+    KEYCLOAK_REALM: 'D_SPRICED',
+    KEYCLOAK_CLIENT_ID: 'D_SPRICED_Client',
+};
+EOF
+echo "✅ Environment file updated with the new URL."
+
 if command -v jq &> /dev/null; then
-    echo "🔧 Using 'jq' to update angular.json to fix budget errors and CommonJS warnings..."
-    jq --arg config "$CONFIG" \
-        '.projects."my-app".architect.build.configurations[$config].budgets |= map(
-            if .type == "initial" then
-                .maximumError = "4mb"
-            elif .type == "anyComponentStyle" then
-                .maximumError = "8kb"
-            else . end
+    echo "Updating 'angular.json' to include the new configuration..."
+    jq --arg config_name "$CONFIG" \
+        --arg env_file "projects/my-app/src/environments/environment.$CONFIG.ts" \
+        '
+        .projects."my-app".architect.build.configurations |= (
+            if (. == null) or (. == "") then {} else . end
         ) |
+        .projects."my-app".architect.build.configurations[$config_name] = {
+            "fileReplacements": [
+                {
+                    "replace": "projects/my-app/src/environments/environment.ts",
+                    "with": $env_file
+                }
+            ],
+            "budgets": [
+                {
+                    "type": "initial",
+                    "maximumWarning": "3mb",
+                    "maximumError": "3.5mb"
+                },
+                {
+                    "type": "anyComponentStyle",
+                    "maximumWarning": "8kb",
+                    "maximumError": "10kb"
+                }
+            ]
+        } |
         .projects."my-app".architect.build.options.allowedCommonJsDependencies |= (
             . + ["file-saver", "echarts-stat"] | unique
         )' "$ANGULAR_CONFIG_FILE" > temp.json && mv temp.json "$ANGULAR_CONFIG_FILE"
-    echo "✅ 'angular.json' updated."
+    echo "✅ 'angular.json' updated successfully."
 else
     echo "⚠️ Warning: 'jq' is not installed. Skipping automatic configuration fixes."
 fi
+
+# --- END of Dynamic Configuration Creation ---
+
 # --- Install Dependencies ---
 echo "📦 Installing npm dependencies (engine warnings suppressed)..."
 npm_config_loglevel=error npm install
-# --- BEGIN PATCH ---
-if [[ "$CONFIG" == "dev" ]]; then
-    echo "💡 Mapping configuration 'dev' to 'development'."
-    CONFIG="development"
-fi
-# --- END PATCH ---
+
+# === Build Process ===
 echo "🛠️ Starting Angular build for project 'my-app' with configuration: $CONFIG..."
 ng build my-app --output-path="$BUILD_DIR" --configuration="$CONFIG"
-# === Create/Update Symlink ===
+
+# === Create/Update Symlink ---
 echo "🔗 Updating 'latest' symlink to point to the new build..."
 ln -snf "$BUILD_DIR" "$LATEST_LINK"
 echo "✅ Build complete for [$REPO] on branch [$BRANCH] with configuration [$CONFIG]"
